@@ -2,7 +2,7 @@
 Painel de tarefas em atraso por setor — ClickUp -> Slack.
 
 Busca no ClickUp as tarefas com prazo vencido e ainda abertas, descobre o setor
-de cada responsável pelo e-mail (tabela `email_submissions` do Supabase, que o
+de cada responsável pelo e-mail (tabela `emails_brabo` do Supabase, que o
 time preencheu pelo formulário aprovasim-emails-site) e posta a contagem por
 setor no Slack. Tarefa sem responsável é ignorada.
 
@@ -14,7 +14,7 @@ Uso:
 Variáveis de ambiente:
     CLICKUP_API_TOKEN     token pessoal do ClickUp (pk_...)
     CLICKUP_TEAM_ID       id do workspace (padrão 9013878636)
-    SUPABASE_URL          projeto onde está email_submissions
+    SUPABASE_URL          projeto onde está a tabela emails_brabo
     SUPABASE_SERVICE_KEY  secret key (a publishable não lê a tabela por causa do RLS)
     SLACK_BOT_TOKEN       bot token (xoxb-...), bot convidado no canal
     SLACK_CHANNEL         ex.: #operacional
@@ -24,8 +24,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
 from collections import defaultdict
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -61,7 +62,7 @@ def buscar_setores_por_email() -> dict[str, str]:
     url = _env("SUPABASE_URL").rstrip("/")
     key = _env("SUPABASE_SERVICE_KEY")
     r = requests.get(
-        f"{url}/rest/v1/email_submissions",
+        f"{url}/rest/v1/emails_brabo",
         params={"select": "area,email"},
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
         timeout=30,
@@ -73,13 +74,16 @@ def buscar_setores_por_email() -> dict[str, str]:
 def buscar_tarefas_atrasadas() -> list[dict]:
     token = _env("CLICKUP_API_TOKEN")
     team_id = _env("CLICKUP_TEAM_ID", "9013878636")
-    agora_ms = int(time.time() * 1000)
+    # Atrasada = venceu antes de hoje. Tarefa que vence hoje ainda está no prazo
+    # (senão uma execução à tarde conta tudo do dia como atraso).
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(hour=0, minute=0, second=0, microsecond=0)
+    corte_ms = int(hoje.timestamp() * 1000)
     tarefas, page = [], 0
     while True:
         r = requests.get(
             f"{CLICKUP_API}/team/{team_id}/task",
             params={
-                "due_date_lt": agora_ms,
+                "due_date_lt": corte_ms,
                 "include_closed": "false",
                 "subtasks": "true",
                 "page": page,
@@ -179,7 +183,7 @@ def main() -> None:
 
     print(f"{len(tarefas)} tarefas vencidas retornadas pelo ClickUp; {len(setor_por_email)} e-mails mapeados.")
     if sem_setor:
-        print("Responsáveis sem setor (e-mail do ClickUp não está em email_submissions):")
+        print("Responsáveis sem setor (e-mail do ClickUp não está em emails_brabo):")
         for pessoa, n in sorted(sem_setor.items(), key=lambda x: -x[1]):
             print(f"  {n:>3}  {pessoa}")
     print("\n" + mensagem)
