@@ -16,8 +16,9 @@ Variáveis de ambiente:
     CLICKUP_TEAM_ID       id do workspace (padrão 9013878636)
     SUPABASE_URL          projeto onde está a tabela emails_brabo
     SUPABASE_SERVICE_KEY  secret key (a publishable não lê a tabela por causa do RLS)
-    SLACK_BOT_TOKEN       bot token (xoxb-...), bot convidado no canal
-    SLACK_CHANNEL         ex.: #operacional
+    SLACK_WEBHOOK_URL     incoming webhook (https://hooks.slack.com/...) — se existir, é usado
+    SLACK_BOT_TOKEN       senão: bot token (xoxb-...), bot convidado no canal
+    SLACK_CHANNEL           + canal, ex.: #operacional
 """
 from __future__ import annotations
 
@@ -157,6 +158,13 @@ def montar_mensagem(contagem: dict[str, int], teste: bool) -> str:
 
 
 def enviar_slack(mensagem: str) -> None:
+    # Incoming webhook já vem preso a um canal e não precisa de bot convidado.
+    webhook = os.environ.get("SLACK_WEBHOOK_URL")
+    if webhook:
+        r = requests.post(webhook, json={"text": mensagem}, timeout=30)
+        if r.status_code != 200 or r.text != "ok":
+            sys.exit(f"Slack recusou o envio: {r.status_code} {r.text}")
+        return
     r = requests.post(
         "https://slack.com/api/chat.postMessage",
         headers={"Authorization": f"Bearer {_env('SLACK_BOT_TOKEN')}"},
