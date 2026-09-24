@@ -10,9 +10,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Cron: segunda a sexta às 08:00 (America/Sao_Paulo = UTC-3, logo 11:00 UTC)
+# Cron: segunda e sexta às 09:30 (America/Sao_Paulo = UTC-3, logo 12:30 UTC)
 # /etc/cron.d/ exige o campo "usuário" na linha
-RUN echo "0 11 * * 1-5 root cd /app && python tarefas_atrasadas.py >> /var/log/painel.log 2>&1" > /etc/cron.d/painel-tarefas \
+RUN echo "30 12 * * 1,5 root cd /app && python tarefas_atrasadas.py >> /var/log/painel.log 2>&1" > /etc/cron.d/painel-tarefas \
     && chmod 0644 /etc/cron.d/painel-tarefas
 
 # Exporta as variáveis de ambiente do container para o cron conseguir lê-las
