@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -59,17 +60,42 @@ def _env(nome: str, padrao: str | None = None) -> str:
     return valor
 
 
-def buscar_setores_por_email() -> dict[str, str]:
+def buscar_setores_por_email() -> dict[str, list[tuple[str, str]]]:
     url = _env("SUPABASE_URL").rstrip("/")
     key = _env("SUPABASE_SERVICE_KEY")
     r = requests.get(
         f"{url}/rest/v1/emails_brabo",
-        params={"select": "area,email"},
+        params={"select": "area,name,email"},
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
         timeout=30,
     )
     r.raise_for_status()
-    return {row["email"].strip().lower(): row["area"] for row in r.json() if row.get("email")}
+    # O mesmo e-mail pode ter sido informado por mais de uma pessoa (caixas
+    # compartilhadas como marketing@), então guarda todas as linhas.
+    por_email: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for row in r.json():
+        if row.get("email"):
+            por_email[row["email"].strip().lower()].append((row.get("name") or "", row["area"]))
+    return por_email
+
+
+def _primeiro_nome(nome: str) -> str:
+    sem_acento = unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode()
+    return (sem_acento.split() or [""])[0].lower()
+
+
+def _setor_do_responsavel(username: str, linhas: list[tuple[str, str]]) -> str | None:
+    """Setor de um responsável do ClickUp. Com e-mail compartilhado, vale a
+    linha cujo primeiro nome bate com o nome no ClickUp; sem isso, só confia
+    se todas as linhas apontam pro mesmo setor."""
+    if not linhas:
+        return None
+    alvo = _primeiro_nome(username)
+    for nome, area in linhas:
+        if alvo and _primeiro_nome(nome) == alvo:
+            return area
+    areas = {area for _, area in linhas}
+    return areas.pop() if len(areas) == 1 else None
 
 
 def buscar_tarefas_atrasadas() -> list[dict]:
@@ -106,7 +132,7 @@ def _concluida(tarefa: dict) -> bool:
     return status.get("type") in ("closed", "done") or (status.get("status") or "").strip().lower() in STATUS_CONCLUIDO
 
 
-def contar_por_setor(tarefas: list[dict], setor_por_email: dict[str, str]):
+def contar_por_setor(tarefas: list[dict], setor_por_email: dict[str, list[tuple[str, str]]]):
     contagem: dict[str, int] = defaultdict(int)
     sem_setor: dict[str, int] = defaultdict(int)
     for t in tarefas:
@@ -116,11 +142,11 @@ def contar_por_setor(tarefas: list[dict], setor_por_email: dict[str, str]):
         setores = set()
         for a in t["assignees"]:
             email = (a.get("email") or "").strip().lower()
-            setor = setor_por_email.get(email)
+            setor = _setor_do_responsavel(a.get("username") or "", setor_por_email.get(email, []))
             if setor:
                 setores.add(setor)
             else:
-                sem_setor[f"{a.get('username')} <{email}>"] += 1
+                sem_setor[f"{a.get('username')} <{email}>"] += 1  # e-mail ausente ou ambíguo
         for s in setores:
             contagem[s] += 1
     return contagem, sem_setor
