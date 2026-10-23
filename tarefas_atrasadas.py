@@ -105,7 +105,7 @@ def buscar_tarefas_atrasadas() -> list[dict]:
     # (senão uma execução à tarde conta tudo do dia como atraso).
     hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).replace(hour=0, minute=0, second=0, microsecond=0)
     corte_ms = int(hoje.timestamp() * 1000)
-    tarefas, page = [], 0
+    tarefas, page, vistos = [], 0, set()
     while True:
         r = requests.get(
             f"{CLICKUP_API}/team/{team_id}/task",
@@ -113,15 +113,25 @@ def buscar_tarefas_atrasadas() -> list[dict]:
                 "due_date_lt": corte_ms,
                 "include_closed": "false",
                 "subtasks": "true",
-                "page": page,
-            },
-            headers={"Authorization": token},
+                "order_by": "id",  # sem ordenação fixa, a varredura de ~9 páginas pode pular/duplicar
+                "page": page,      # tarefa na borda das páginas bem na virada do dia (due_date mudando
+            },                     # de "no prazo" pra "atrasado" em massa no meio da própria busca) —
+            headers={"Authorization": token},  # já causou contagem fantasma em produção (23/10/2026)
             timeout=60,
         )
         r.raise_for_status()
         data = r.json()
-        tarefas.extend(data.get("tasks", []))
-        if data.get("last_page", True) or not data.get("tasks"):
+        pagina = data.get("tasks", [])
+        novos = 0
+        for t in pagina:
+            if t["id"] not in vistos:
+                vistos.add(t["id"])
+                tarefas.append(t)
+                novos += 1
+        if data.get("last_page", True) or not pagina:
+            break
+        if novos == 0:
+            # página inteira já vista: provável instabilidade da API no meio da varredura
             break
         page += 1
     return tarefas
